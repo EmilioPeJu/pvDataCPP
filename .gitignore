@@ -6,9 +6,6 @@
 /html/
 /include/
 /templates/
-/configure/*.local
-/configure/RELEASE.*
-/configure/CONFIG_SITE.*
 O.*/
 /QtC-*
 envPaths
