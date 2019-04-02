@@ -12,7 +12,9 @@
 #include <string>
 #include <stdexcept>
 #include <iostream>
+#include <map>
 
+#include <pv/lock.h>
 #include <pv/noDefaultMethods.h>
 #include <pv/pvType.h>
 #include <pv/byteBuffer.h>
@@ -20,6 +22,40 @@
 #include <pv/pvdVersion.h>
 
 #include <shareLib.h>
+
+#if defined(PVD_INTERNAL)
+#  define PVD_DEPRECATED(msg)
+#elif __GNUC__ > 4 || __GNUC__ == 4 && __GNUC_MINOR__ >= 5
+#  define PVD_DEPRECATED(msg) __attribute__((deprecated(msg)))
+#else
+#  define PVD_DEPRECATED(msg) EPICS_DEPRECATED
+#endif
+#define PVD_DEPRECATED_52 PVD_DEPRECATED("See https://github.com/epics-base/pvDataCPP/issues/52")
+
+/* C++11 keywords
+ @code
+ struct Base {
+   virtual void foo();
+ };
+ struct Class : public Base {
+   virtual void foo() OVERRIDE FINAL;
+ };
+ @endcode
+ */
+#ifndef FINAL
+#  if __cplusplus>=201103L
+#    define FINAL final
+#  else
+#    define FINAL
+#  endif
+#endif
+#ifndef OVERRIDE
+#  if __cplusplus>=201103L
+#    define OVERRIDE override
+#  else
+#    define OVERRIDE
+#  endif
+#endif
 
 namespace epics { namespace pvData { 
 
@@ -90,6 +126,13 @@ class Union;
 class UnionArray;
 
 class BoundedString;
+
+class PVField;
+class PVScalar;
+class PVScalarArray;
+class PVStructure;
+class PVUnion;
+template<typename T> class PVValueArray;
 
 /**
  * typedef for a shared pointer to an immutable Field.
@@ -295,9 +338,6 @@ public:
    static size_t num_instances;
 
    POINTER_DEFINITIONS(Field);
-    /**
-     * Destructor.
-     */
    virtual ~Field();
     /**
      * Get the field type.
@@ -317,6 +357,10 @@ public:
      */
     virtual std::ostream& dump(std::ostream& o) const = 0;
 
+   //! Allocate a new instance
+   //! @version Added after 7.0.0
+    std::tr1::shared_ptr<PVField> build() const;
+
 protected:
     /**
      * Constructor
@@ -325,6 +369,9 @@ protected:
    Field(Type type);
 private:
    const Type m_fieldType;
+   unsigned int m_hash;
+   struct Helper;
+   friend struct Helper;
 
    friend class StructureArray;
    friend class Structure;
@@ -332,8 +379,7 @@ private:
    friend class StandardField;
    friend class BasePVStructureArray;
    friend class FieldCreate;
-
-   struct Deleter{void operator()(Field *p){delete p;}};
+   EPICS_NOT_COPYABLE(Field)
 };
 
 epicsShareExtern std::ostream& operator<<(std::ostream& o, const Field& field);
@@ -346,9 +392,6 @@ epicsShareExtern std::ostream& operator<<(std::ostream& o, const Field& field);
 class epicsShareClass Scalar : public Field{
 public:
     POINTER_DEFINITIONS(Scalar);
-    /**
-     * Destructor.
-     */
     virtual ~Scalar();
     typedef Scalar& reference;
     typedef const Scalar& const_reference;
@@ -358,12 +401,16 @@ public:
      */
     ScalarType getScalarType() const {return scalarType;}
     
-    virtual std::string getID() const;
+    virtual std::string getID() const OVERRIDE;
 
-    virtual std::ostream& dump(std::ostream& o) const;
+    virtual std::ostream& dump(std::ostream& o) const OVERRIDE FINAL;
 
-    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const;
-    virtual void deserialize(ByteBuffer *buffer, DeserializableControl *control);
+    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const OVERRIDE;
+    virtual void deserialize(ByteBuffer *buffer, DeserializableControl *control) OVERRIDE FINAL;
+
+    //! Allocate a new instance
+    //! @version Added after 7.0.0
+    std::tr1::shared_ptr<PVScalar> build() const;
     
 protected:
     Scalar(ScalarType scalarType);
@@ -375,6 +422,7 @@ private:
     friend class BoundedScalarArray;
     friend class FixedScalarArray;
     friend class BoundedString;
+    EPICS_NOT_COPYABLE(Scalar)
 };
 
 /**
@@ -384,16 +432,13 @@ private:
 class epicsShareClass BoundedString : public Scalar{
 public:
     POINTER_DEFINITIONS(BoundedString);
-    /**
-     * Destructor.
-     */
     virtual ~BoundedString();
     typedef BoundedString& reference;
     typedef const BoundedString& const_reference;
 
-    virtual std::string getID() const;
+    virtual std::string getID() const OVERRIDE FINAL;
 
-    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const;
+    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const OVERRIDE FINAL;
 
     std::size_t getMaximumLength() const;
 
@@ -402,6 +447,7 @@ protected:
 private:
     std::size_t maxLength;
     friend class FieldCreate;
+    EPICS_NOT_COPYABLE(BoundedString)
 };
 
 /**
@@ -411,9 +457,6 @@ private:
 class epicsShareClass Array : public Field{
 public:
     POINTER_DEFINITIONS(Array);
-    /**
-     * Destructor.
-     */
     virtual ~Array();
     typedef Array& reference;
     typedef const Array& const_reference;
@@ -439,6 +482,7 @@ protected:
      */
    Array(Type type);
 
+   EPICS_NOT_COPYABLE(Array)
 };
 
 /**
@@ -462,26 +506,27 @@ public:
      */
     ScalarType getElementType() const {return elementType;}
     
-    virtual ArraySizeType getArraySizeType() const {return Array::variable;}
+    virtual ArraySizeType getArraySizeType() const OVERRIDE {return Array::variable;}
 
-    virtual std::size_t getMaximumCapacity() const {return 0;}
+    virtual std::size_t getMaximumCapacity() const OVERRIDE {return 0;}
 
-    virtual std::string getID() const;
+    virtual std::string getID() const OVERRIDE;
 
-    virtual std::ostream& dump(std::ostream& o) const;
+    virtual std::ostream& dump(std::ostream& o) const OVERRIDE FINAL;
 
-    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const;
-    virtual void deserialize(ByteBuffer *buffer, DeserializableControl *control);
+    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const OVERRIDE;
+    virtual void deserialize(ByteBuffer *buffer, DeserializableControl *control) OVERRIDE FINAL;
+
+    //! Allocate a new instance
+    //! @version Added after 7.0.0
+     std::tr1::shared_ptr<PVScalarArray> build() const;
     
-protected:
-    /**
-     * Destructor.
-     */
     virtual ~ScalarArray();
 private:
     const std::string getIDScalarArrayLUT() const;
     ScalarType elementType;
     friend class FieldCreate;
+    EPICS_NOT_COPYABLE(ScalarArray)
 };
 
 
@@ -503,22 +548,19 @@ public:
      */
     BoundedScalarArray(ScalarType scalarType, std::size_t size);
 
-    virtual ArraySizeType getArraySizeType() const {return Array::bounded;}
+    virtual ArraySizeType getArraySizeType() const OVERRIDE FINAL {return Array::bounded;}
 
-    virtual std::size_t getMaximumCapacity() const {return size;}
+    virtual std::size_t getMaximumCapacity() const OVERRIDE FINAL {return size;}
 
-    virtual std::string getID() const;
+    virtual std::string getID() const OVERRIDE FINAL;
 
-    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const;
+    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const OVERRIDE FINAL;
 
-protected:
-    /**
-     * Destructor.
-     */
     virtual ~BoundedScalarArray();
 private:
     std::size_t size;
     friend class FieldCreate;
+    EPICS_NOT_COPYABLE(BoundedScalarArray)
 };
 
 /**
@@ -538,22 +580,19 @@ public:
      */
     FixedScalarArray(ScalarType scalarType, std::size_t size);
 
-    virtual ArraySizeType getArraySizeType() const {return Array::fixed;}
+    virtual ArraySizeType getArraySizeType() const OVERRIDE FINAL {return Array::fixed;}
 
-    virtual std::size_t getMaximumCapacity() const {return size;}
+    virtual std::size_t getMaximumCapacity() const OVERRIDE FINAL {return size;}
 
-    virtual std::string getID() const;
+    virtual std::string getID() const OVERRIDE FINAL;
 
-    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const;
+    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const OVERRIDE FINAL;
 
-protected:
-    /**
-     * Destructor.
-     */
     virtual ~FixedScalarArray();
 private:
     std::size_t size;
     friend class FieldCreate;
+    EPICS_NOT_COPYABLE(FixedScalarArray)
 };
 
 /**
@@ -570,18 +609,22 @@ public:
      * Get the introspection interface for the array elements.
      * @return The introspection interface.
      */
-    StructureConstPtr getStructure() const {return pstructure;}
+    const StructureConstPtr& getStructure() const {return pstructure;}
 
-    virtual ArraySizeType getArraySizeType() const {return Array::variable;}
+    virtual ArraySizeType getArraySizeType() const OVERRIDE FINAL {return Array::variable;}
 
-    virtual std::size_t getMaximumCapacity() const {return 0;}
+    virtual std::size_t getMaximumCapacity() const OVERRIDE FINAL {return 0;}
 
-    virtual std::string getID() const;
+    virtual std::string getID() const OVERRIDE FINAL;
 
-    virtual std::ostream& dump(std::ostream& o) const;
+    virtual std::ostream& dump(std::ostream& o) const OVERRIDE FINAL;
 
-    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const;
-    virtual void deserialize(ByteBuffer *buffer, DeserializableControl *control);
+    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const OVERRIDE FINAL;
+    virtual void deserialize(ByteBuffer *buffer, DeserializableControl *control) OVERRIDE FINAL;
+
+    //! Allocate a new instance
+    //! @version Added after 7.0.0
+     std::tr1::shared_ptr<PVValueArray<std::tr1::shared_ptr<PVStructure> > > build() const;
 
 protected:
     /**
@@ -589,13 +632,12 @@ protected:
      * @param structure The introspection interface for the elements.
      */
     StructureArray(StructureConstPtr const & structure);
-    /**
-     * Destructor.
-     */
+public:
     virtual ~StructureArray();
 private:
     StructureConstPtr pstructure;
     friend class FieldCreate;
+    EPICS_NOT_COPYABLE(StructureArray)
 };
 
 /**
@@ -614,16 +656,20 @@ public:
      */
     UnionConstPtr getUnion() const {return punion;}
 
-    virtual ArraySizeType getArraySizeType() const {return Array::variable;}
+    virtual ArraySizeType getArraySizeType() const OVERRIDE FINAL {return Array::variable;}
 
-    virtual std::size_t getMaximumCapacity() const {return 0;}
+    virtual std::size_t getMaximumCapacity() const OVERRIDE FINAL {return 0;}
 
-    virtual std::string getID() const;
+    virtual std::string getID() const OVERRIDE FINAL;
 
-    virtual std::ostream& dump(std::ostream& o) const;
+    virtual std::ostream& dump(std::ostream& o) const OVERRIDE FINAL;
 
-    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const;
-    virtual void deserialize(ByteBuffer *buffer, DeserializableControl *control);
+    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const OVERRIDE FINAL;
+    virtual void deserialize(ByteBuffer *buffer, DeserializableControl *control) OVERRIDE FINAL;
+
+    //! Allocate a new instance
+    //! @version Added after 7.0.0
+     std::tr1::shared_ptr<PVValueArray<std::tr1::shared_ptr<PVUnion> > > build() const;
 
 protected:
     /**
@@ -631,13 +677,12 @@ protected:
      * @param _punion The introspection interface for the elements.
      */
     UnionArray(UnionConstPtr const & _punion);
-    /**
-     * Destructor.
-     */
+public:
     virtual ~UnionArray();
 private:
     UnionConstPtr punion;
     friend class FieldCreate;
+    EPICS_NOT_COPYABLE(UnionArray)
 };
 
 /**
@@ -659,9 +704,6 @@ public:
      */
     static const std::string & defaultId();
 
-    /**
-     * Destructor.
-     */
     virtual ~Structure();
     typedef Structure& reference;
     typedef const Structure& const_reference;
@@ -682,8 +724,8 @@ public:
     template<typename FT>
     std::tr1::shared_ptr<const FT> getField(std::string const &fieldName) const
     {
-        FieldConstPtr field = getField(fieldName);
-        if (field.get())
+        FieldConstPtr field(getField(fieldName));
+        if (field)
             return std::tr1::dynamic_pointer_cast<const FT>(field);
         else
             return std::tr1::shared_ptr<const FT>();
@@ -695,13 +737,13 @@ public:
      * @return The introspection interface.
      * This will hold a null pointer if the field is not in the structure.
      */
-    FieldConstPtr getField(std::size_t index) const {return fields.at(index);}
+    const FieldConstPtr& getField(std::size_t index) const {return fields.at(index);}
 
     template<typename FT>
     std::tr1::shared_ptr<const FT> getField(std::size_t index) const
     {
-        FieldConstPtr field = getField(index);
-        if (field.get())
+        const FieldConstPtr& field(getField(index));
+        if (field)
             return std::tr1::dynamic_pointer_cast<const FT>(field);
         else
             return std::tr1::shared_ptr<const FT>();
@@ -728,15 +770,19 @@ public:
      * @param fieldIndex The index of the desired field.
      * @return The fieldName.
      */
-    std::string getFieldName(std::size_t fieldIndex) const {return fieldNames.at(fieldIndex);}
+    const std::string& getFieldName(std::size_t fieldIndex) const {return fieldNames.at(fieldIndex);}
 
-    virtual std::string getID() const;
+    virtual std::string getID() const OVERRIDE FINAL;
 
-    virtual std::ostream& dump(std::ostream& o) const;
+    virtual std::ostream& dump(std::ostream& o) const OVERRIDE FINAL;
 
-    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const;
-    virtual void deserialize(ByteBuffer *buffer, DeserializableControl *control);
-    
+    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const OVERRIDE FINAL;
+    virtual void deserialize(ByteBuffer *buffer, DeserializableControl *control) OVERRIDE FINAL;
+
+    //! Allocate a new instance
+    //! @version Added after 7.0.0
+    std::tr1::shared_ptr<PVStructure> build() const;
+
 protected:
     Structure(StringArray const & fieldNames, FieldConstPtrArray const & fields, std::string const & id = defaultId());
 private:
@@ -744,10 +790,11 @@ private:
     FieldConstPtrArray fields;
     std::string id;
 
-    virtual void dumpFields(std::ostream& o) const;
+    void dumpFields(std::ostream& o) const;
     
     friend class FieldCreate;
     friend class Union;
+    EPICS_NOT_COPYABLE(Structure)
 };
 
 /**
@@ -780,9 +827,6 @@ public:
      */
     static const std::string & anyId();
 
-    /**
-     * Destructor.
-     */
     virtual ~Union();
     typedef Union& reference;
     typedef const Union& const_reference;
@@ -804,7 +848,7 @@ public:
     std::tr1::shared_ptr<const FT> getField(std::string const &fieldName) const
     {
         FieldConstPtr field = getField(fieldName);
-        if (field.get())
+        if (field)
             return std::tr1::dynamic_pointer_cast<const FT>(field);
         else
             return std::tr1::shared_ptr<const FT>();
@@ -822,7 +866,7 @@ public:
     std::tr1::shared_ptr<const FT> getField(std::size_t index) const
     {
         FieldConstPtr field = getField(index);
-        if (field.get())
+        if (field)
             return std::tr1::dynamic_pointer_cast<const FT>(field);
         else
             return std::tr1::shared_ptr<const FT>();
@@ -867,12 +911,16 @@ public:
      */
     int32 guess(Type t, ScalarType s) const;
 
-    virtual std::string getID() const;
+    virtual std::string getID() const OVERRIDE FINAL;
 
-    virtual std::ostream& dump(std::ostream& o) const;
+    virtual std::ostream& dump(std::ostream& o) const OVERRIDE FINAL;
 
-    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const;
-    virtual void deserialize(ByteBuffer *buffer, DeserializableControl *control);
+    virtual void serialize(ByteBuffer *buffer, SerializableControl *control) const OVERRIDE FINAL;
+    virtual void deserialize(ByteBuffer *buffer, DeserializableControl *control) OVERRIDE FINAL;
+
+    //! Allocate a new instance
+    //! @version Added after 7.0.0
+    std::tr1::shared_ptr<PVUnion> build() const;
     
 protected:
    Union();
@@ -882,10 +930,11 @@ private:
    FieldConstPtrArray fields;
    std::string id;
    
-   virtual void dumpFields(std::ostream& o) const;
+   void dumpFields(std::ostream& o) const;
 
    friend class FieldCreate;
    friend class Structure;
+   EPICS_NOT_COPYABLE(Union)
 };
 
 class FieldCreate;
@@ -905,6 +954,12 @@ class epicsShareClass FieldBuilder :
     public std::tr1::enable_shared_from_this<FieldBuilder>
 {
 public:
+    //! Create a new instance of in-line @c Field builder.
+    //! @version Added after 7.0.0
+    static FieldBuilderPtr begin();
+    //! Create a new instance of in-line @c Field builder pre-initialized with and existing Structure
+    static FieldBuilderPtr begin(StructureConstPtr S);
+
 	/**
 	 * Set ID of an object to be created.
 	 * @param id id to be set.
@@ -926,7 +981,7 @@ public:
      * @param maxLength a string maximum length.
      * @return this instance of a @c FieldBuilder.
      */
-    FieldBuilderPtr addBoundedString(std::string const & name, std::size_t maxLength);
+    FieldBuilderPtr addBoundedString(std::string const & name, std::size_t maxLength) PVD_DEPRECATED_52;
 
     /**
      * Add a @c Field (e.g. @c Structure, @c Union).
@@ -951,7 +1006,7 @@ public:
      * @param size Array fixed size.
      * @return this instance of a @c FieldBuilder.
      */
-    FieldBuilderPtr addFixedArray(std::string const & name, ScalarType scalarType, std::size_t size);
+    FieldBuilderPtr addFixedArray(std::string const & name, ScalarType scalarType, std::size_t size) PVD_DEPRECATED_52;
 
     /**
      * Add bounded-size array of @c Scalar elements.
@@ -960,7 +1015,7 @@ public:
      * @param bound Array maximum capacity (size).
      * @return this instance of a @c FieldBuilder.
      */
-    FieldBuilderPtr addBoundedArray(std::string const & name, ScalarType scalarType, std::size_t bound);
+    FieldBuilderPtr addBoundedArray(std::string const & name, ScalarType scalarType, std::size_t bound) PVD_DEPRECATED_52;
 
     /**
      * Add array of @c Field elements.
@@ -1065,11 +1120,16 @@ private:
     const bool createNested; // true - endNested() creates in parent, false - endNested() appends to parent
 };
 
+namespace detail {
+struct field_factory;
+}
+
 /**
  * @brief This is a singleton class for creating introspection interfaces.
  *
  */
 class epicsShareClass FieldCreate {
+    friend struct detail::field_factory;
 public:
     static const FieldCreatePtr &getFieldCreate();
 	/**
@@ -1095,7 +1155,7 @@ public:
      * @return a @c BoundedString interface for the newly created object.
      * @throws IllegalArgumentException if maxLength == 0.
      */
-    BoundedStringConstPtr createBoundedString(std::size_t maxLength) const;
+    BoundedStringConstPtr createBoundedString(std::size_t maxLength) const PVD_DEPRECATED_52;
     /**
      * Create an @c Array field, variable size array.
      * @param elementType The @c ScalarType for array elements
@@ -1108,14 +1168,14 @@ public:
      * @param size Fixed array size.
      * @return An @c Array Interface for the newly created object.
      */
-    ScalarArrayConstPtr createFixedScalarArray(ScalarType elementType, std::size_t size) const;
+    ScalarArrayConstPtr createFixedScalarArray(ScalarType elementType, std::size_t size) const PVD_DEPRECATED_52;
     /**
      * Create an @c Array field, bounded size array.
      * @param elementType The @c ScalarType for array elements
      * @param bound Array maximum capacity.
      * @return An @c Array Interface for the newly created object.
      */
-     ScalarArrayConstPtr createBoundedScalarArray(ScalarType elementType, std::size_t bound) const;
+     ScalarArrayConstPtr createBoundedScalarArray(ScalarType elementType, std::size_t bound) const PVD_DEPRECATED_52;
      /**
       * Create an @c Array field that is has element type @c Structure
       * @param structure The @c Structure for each array element.
@@ -1214,11 +1274,20 @@ public:
         
 private:
     FieldCreate();
-    
+
+    // const after ctor
     std::vector<ScalarConstPtr> scalars;
     std::vector<ScalarArrayConstPtr> scalarArrays;
     UnionConstPtr variantUnion;
     UnionArrayConstPtr variantUnionArray;
+
+    mutable Mutex mutex;
+    typedef std::multimap<unsigned int, Field*> cache_t;
+    mutable cache_t cache;
+
+    struct Helper;
+    friend class Field;
+    EPICS_NOT_COPYABLE(FieldCreate)
 };
 
 /**
@@ -1270,67 +1339,35 @@ OP(pvDouble, double)
 OP(pvString, std::string)
 #undef OP
 
-/**
- * @brief Hash a Scalar
+bool epicsShareExtern compare(const Field&, const Field&);
+bool epicsShareExtern compare(const Scalar&, const Scalar&);
+bool epicsShareExtern compare(const ScalarArray&, const ScalarArray&);
+bool epicsShareExtern compare(const Structure&, const Structure&);
+bool epicsShareExtern compare(const StructureArray&, const StructureArray&);
+bool epicsShareExtern compare(const Union&, const Union&);
+bool epicsShareExtern compare(const UnionArray&, const UnionArray&);
+bool epicsShareExtern compare(const BoundedString&, const BoundedString&);
+
+/** Equality with other Field
  *
+ * The creation process of class FieldCreate ensures that identical field definitions
+ * will share the same instance.  So pointer equality is sufficient to show defintion
+ * equality.  If in doubt, compare() will do an full test.
  */
-struct ScalarHashFunction {
-    size_t operator() (const Scalar& scalar) const { return scalar.getScalarType(); }
-};
+#define MAKE_COMPARE(CLASS) \
+static FORCE_INLINE bool operator==(const CLASS& a, const CLASS& b) {return (void*)&a==(void*)&b;} \
+static FORCE_INLINE bool operator!=(const CLASS& a, const CLASS& b) {return !(a==b);}
 
-/**
- * @brief Hash a ScalarArray
- *
- */
-struct ScalarArrayHashFunction {
-    size_t operator() (const ScalarArray& scalarArray) const { return 0x10 | scalarArray.getElementType(); }
-};
+MAKE_COMPARE(Field)
+MAKE_COMPARE(Scalar)
+MAKE_COMPARE(ScalarArray)
+MAKE_COMPARE(Structure)
+MAKE_COMPARE(StructureArray)
+MAKE_COMPARE(Union)
+MAKE_COMPARE(UnionArray)
+MAKE_COMPARE(BoundedString)
 
-/**
- * @brief Hash a Structure
- *
- */
-struct StructureHashFunction {
-    size_t operator() (const Structure& /*structure*/) const { return 0; }
-    // TODO hash
-//        final int PRIME = 31;
-//        return PRIME * Arrays.hashCode(fieldNames) + Arrays.hashCode(fields);
-};
-
-/**
- * @brief Hash a StructureArray
- *
- */
-struct StructureArrayHashFunction {
-    size_t operator() (const StructureArray& structureArray) const { StructureHashFunction shf; return (0x10 | shf(*(structureArray.getStructure()))); }
-};
-
-bool epicsShareExtern operator==(const Field&, const Field&);
-bool epicsShareExtern operator==(const Scalar&, const Scalar&);
-bool epicsShareExtern operator==(const ScalarArray&, const ScalarArray&);
-bool epicsShareExtern operator==(const Structure&, const Structure&);
-bool epicsShareExtern operator==(const StructureArray&, const StructureArray&);
-bool epicsShareExtern operator==(const Union&, const Union&);
-bool epicsShareExtern operator==(const UnionArray&, const UnionArray&);
-bool epicsShareExtern operator==(const BoundedString&, const BoundedString&);
-
-static inline bool operator!=(const Field& a, const Field& b)
-{return !(a==b);}
-static inline bool operator!=(const Scalar& a, const Scalar& b)
-{return !(a==b);}
-static inline bool operator!=(const ScalarArray& a, const ScalarArray& b)
-{return !(a==b);}
-static inline bool operator!=(const Structure& a, const Structure& b)
-{return !(a==b);}
-static inline bool operator!=(const StructureArray& a, const StructureArray& b)
-{return !(a==b);}
-static inline bool operator!=(const Union& a, const Union& b)
-{return !(a==b);}
-static inline bool operator!=(const UnionArray& a, const UnionArray& b)
-{return !(a==b);}
-static inline bool operator!=(const BoundedString& a, const BoundedString& b)
-{return !(a==b);}
-
+#undef MAKE_COMPARE
 }}
 
 /**

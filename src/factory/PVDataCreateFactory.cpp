@@ -7,16 +7,13 @@
  *  @author mrk
  */
 
-#if defined(_WIN32) && !defined(NOMINMAX)
-#define NOMINMAX
-#endif
-
 #include <cstddef>
 #include <cstdlib>
 #include <string>
 #include <cstdio>
 
 #include <epicsMutex.h>
+#include <epicsThread.h>
 
 #define epicsExportSharedSymbols
 #include <pv/lock.h>
@@ -65,6 +62,48 @@ template<typename T>
 PVScalarValue<T>::~PVScalarValue() {}
 
 template<typename T>
+std::ostream& PVScalarValue<T>::dumpValue(std::ostream& o) const
+{
+    return o << get();
+}
+
+template<typename T>
+void PVScalarValue<T>::operator>>=(T& value) const
+{
+    value = get();
+}
+
+template<typename T>
+void PVScalarValue<T>::operator<<=(typename storage_t::arg_type value)
+{
+    put(value);
+}
+
+template<typename T>
+void PVScalarValue<T>::assign(const PVScalar& scalar)
+{
+    if(isImmutable())
+        throw std::invalid_argument("destination is immutable");
+    copyUnchecked(scalar);
+}
+
+template<typename T>
+void PVScalarValue<T>::copy(const PVScalar& from)
+{
+    assign(from);
+}
+
+template<typename T>
+void PVScalarValue<T>::copyUnchecked(const PVScalar& from)
+{
+    if(this==&from)
+        return;
+    T result;
+    from.getAs((void*)&result, typeCode);
+    put(result);
+}
+
+template<typename T>
 void PVScalarValue<T>::serialize(ByteBuffer *pbuffer,
     SerializableControl *pflusher) const {
     pflusher->ensureBuffer(sizeof(T));
@@ -101,6 +140,13 @@ PVString::PVString(ScalarConstPtr const & scalar)
         storage.maxLength = boundedString->getMaximumLength();
     else
         storage.maxLength = 0;
+}
+
+std::ostream& PVString::dumpValue(std::ostream& o) const
+{
+    // we escape, but do not quote, for scalar string
+    o<<escape(get());
+    return o;
 }
 
 /* mixing overrides (virtual functions) and overloads (different argument lists) is fun...
@@ -158,6 +204,59 @@ PVValueArray<PVUnionPtr>::PVValueArray(UnionArrayConstPtr const & unionArray)
     :base_t(unionArray)
     ,unionArray(unionArray)
 {}
+
+template<typename T>
+PVValueArray<T>::~PVValueArray() {}
+
+template<typename T>
+ArrayConstPtr PVValueArray<T>::getArray() const
+{
+    return std::tr1::static_pointer_cast<const Array>(this->getField());
+}
+
+template<typename T>
+std::ostream& PVValueArray<T>::dumpValue(std::ostream& o) const
+{
+    const_svector v(this->view());
+    typename const_svector::const_iterator it(v.begin()),
+                                  end(v.end());
+    o << '[';
+    if(it!=end) {
+        o << print_cast(*it++);
+        for(; it!=end; ++it)
+            o << ',' << print_cast(*it);
+
+    }
+    return o << ']';
+}
+
+template<>
+std::ostream& PVValueArray<std::string>::dumpValue(std::ostream& o, size_t index) const
+{
+    return o << '"' << escape(this->view().at(index)) << '"';
+}
+
+template<>
+std::ostream& PVValueArray<std::string>::dumpValue(std::ostream& o) const
+{
+    const_svector v(this->view());
+    const_svector::const_iterator it(v.begin()),
+                                  end(v.end());
+    o << '[';
+    if(it!=end) {
+        o << '"' << escape(*it++) << '"';
+        for(; it!=end; ++it)
+            o << ", \"" << escape(*it) << '"';
+
+    }
+    return o << ']';
+}
+
+template<typename T>
+std::ostream& PVValueArray<T>::dumpValue(std::ostream& o, size_t index) const
+{
+    return o << print_cast(this->view().at(index));
+}
 
 template<typename T>
 void PVValueArray<T>::setCapacity(size_t capacity)
@@ -349,6 +448,18 @@ void PVValueArray<string>::serialize(ByteBuffer *pbuffer,
     for(size_t i = 0; i<temp.size(); i++) {
         SerializeHelper::serializeString(pvalue[i], pbuffer, pflusher);
     }
+}
+
+template<typename T>
+void PVValueArray<T>::_getAsVoid(epics::pvData::shared_vector<const void>& out) const
+{
+    out = static_shared_vector_cast<const void>(this->view());
+}
+
+template<typename T>
+void PVValueArray<T>::_putFromVoid(const epics::pvData::shared_vector<const void>& in)
+{
+    this->replace(shared_vector_convert<const T>(in));
 }
 
 // Factory
@@ -604,19 +715,33 @@ PVUnionPtr PVDataCreate::createPVUnion(PVUnionPtr const & unionToClone)
     return punion;
 }
 
-// TODO not thread-safe (local static initializers)
-// TODO replace with non-locking singleton pattern
+namespace detail {
+struct pvfield_factory {
+    PVDataCreatePtr pvDataCreate;
+    pvfield_factory() :pvDataCreate(new PVDataCreate()) {
+        registerRefCounter("PVField", &PVField::num_instances);
+    }
+};
+}
+
+static detail::pvfield_factory* pvfield_factory_s;
+static epicsThreadOnceId pvfield_factory_once = EPICS_THREAD_ONCE_INIT;
+
+static void pvfield_factory_init(void*)
+{
+    try {
+        pvfield_factory_s = new detail::pvfield_factory;
+    }catch(std::exception& e){
+        std::cerr<<"Error initializing getFieldCreate() : "<<e.what()<<"\n";
+    }
+}
+
 const PVDataCreatePtr& PVDataCreate::getPVDataCreate()
 {
-    static PVDataCreatePtr pvDataCreate;
-    static Mutex mutex;
-    Lock xx(mutex);
-
-    if(pvDataCreate.get()==0) {
-        registerRefCounter("PVField", &PVField::num_instances);
-        pvDataCreate = PVDataCreatePtr(new PVDataCreate());
-    }
-    return pvDataCreate;
+    epicsThreadOnce(&pvfield_factory_once, &pvfield_factory_init, 0);
+    if(!pvfield_factory_s->pvDataCreate)
+        throw std::logic_error("getPVDataCreate() not initialized");
+    return pvfield_factory_s->pvDataCreate;
 }
 
 // explicitly instanciate to ensure that windows

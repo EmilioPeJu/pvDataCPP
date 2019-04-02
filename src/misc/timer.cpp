@@ -6,16 +6,13 @@
 /**
  *  @author mrk
  */
- 
-#if defined(_WIN32) && !defined(NOMINMAX)
-#define NOMINMAX
-#endif
 
 #include <stdexcept>
 #include <string>
 #include <iostream>
 
 #include <epicsThread.h>
+#include <epicsGuard.h>
 
 #define epicsExportSharedSymbols
 #include <pv/timer.h>
@@ -31,66 +28,52 @@ TimerCallback::TimerCallback()
 }
 
 Timer::Timer(string threadName,ThreadPriority priority)
-: waitForWork(false),
-  alive(true),
-  thread(threadName,priority,this)
+    :waitForWork(false)
+    ,waiting(false)
+    ,alive(true)
+    ,thread(threadName,priority,this)
 {}
 
+struct TimerCallback::IncreasingTime {
+    bool operator()(const TimerCallbackPtr& lhs, const TimerCallbackPtr& rhs) {
+        assert(lhs && rhs);
+        return lhs->timeToRun < rhs->timeToRun;
+    }
+};
+
+// call with mutex held
 void Timer::addElement(TimerCallbackPtr const & timerCallback)
 {
+    assert(!timerCallback->onList);
+
+    queue_t temp;
+    temp.push_back(timerCallback);
+
     timerCallback->onList = true;
-    if(head.get()==NULL) {
-        head = timerCallback;
-        timerCallback->next.reset();
-        return;
-    }
-    TimerCallbackPtr nextNode(head);
-    TimerCallbackPtr prevNode;
-    while(true) {
-        if(timerCallback->timeToRun < nextNode->timeToRun) {
-            if(prevNode.get()!=NULL) {
-                prevNode->next = timerCallback;
-            } else {
-                head = timerCallback;
-            }
-            timerCallback->next = nextNode;
-            return;
-        }
-        if(nextNode->next.get()==NULL) {
-            nextNode->next = timerCallback;
-            timerCallback->next.reset();
-            return;
-        }
-        prevNode = nextNode;
-        nextNode = nextNode->next;
-    }
+
+    // merge sorted lists.
+    // for us effectively insertion sort.
+    queue.merge(temp, TimerCallback::IncreasingTime());
 }
 
 
-void Timer::cancel(TimerCallbackPtr const &timerCallback)
+bool Timer::cancel(TimerCallbackPtr const &timerCallback)
 {
     Lock xx(mutex);
-    if(!timerCallback->onList) return;
-    TimerCallbackPtr nextNode(head);
-    TimerCallbackPtr prevNode;
-    while(true) {
-        if(nextNode.get()==timerCallback.get()) {
-            if(prevNode.get()!=NULL) {
-                prevNode->next = timerCallback->next;
-            } else {
-                head = timerCallback->next;
-            }
-            timerCallback->next.reset();
-            timerCallback->onList = false;
-            return;
+    if(!timerCallback->onList) return false;
+    for(queue_t::iterator it(queue.begin()), end(queue.end()); it != end; ++it)
+    {
+        TimerCallbackPtr& cur = *it;
+        if(cur.get() == timerCallback.get()) {
+            cur->onList = false;
+            queue.erase(it); // invalidates cur and it
+            return true;
         }
-        prevNode = nextNode;
-        nextNode = nextNode->next;
     }
-    throw std::logic_error(string(""));
+    throw std::logic_error("Timer::cancel() onList==true, but not found");
 }
 
-bool Timer::isScheduled(TimerCallbackPtr const &timerCallback)
+bool Timer::isScheduled(TimerCallbackPtr const &timerCallback) const
 {
     Lock xx(mutex);
     return timerCallback->onList;
@@ -99,62 +82,75 @@ bool Timer::isScheduled(TimerCallbackPtr const &timerCallback)
 
 void Timer::run()
 {
-    TimeStamp currentTime;
-    while(true) {
-         double period = 0.0;
-         TimerCallbackPtr nodeToCall;
-         {
-             Lock xx(mutex);
-             currentTime.getCurrent();
-             if (!alive) break;
-             TimerCallbackPtr timerCallback = head;
-             if(timerCallback.get()!=NULL) {
-                 double diff = TimeStamp::diff(
-                     timerCallback->timeToRun,currentTime);
-                 if(diff<=0.0) {
-                     nodeToCall = timerCallback;
-                     nodeToCall->onList = false;
-                     head = head->next;
-                     period = timerCallback->period;
-                     if(period>0.0) {
-                         timerCallback->timeToRun += period;
-                         addElement(timerCallback);
-                     }
-                     timerCallback = head;
-                 }
-             }
-         }
-         if(nodeToCall.get()!=NULL) {
-             nodeToCall->callback();
-         }
-         {
-             Lock xx(mutex);
-             if(!alive) break;
-         }
-         if(head.get()==NULL) {
+    epicsGuard<epicsMutex> G(mutex);
+
+    epicsTime now(epicsTime::getCurrent());
+
+    while(alive) {
+        double waitfor;
+
+        if(queue.empty()) {
+            // no jobs, just go to sleep
+            waiting = true;
+            epicsGuardRelease<epicsMutex> U(G);
+
             waitForWork.wait();
-         } else {
-             double delay = TimeStamp::diff(head->timeToRun,currentTime);
-             waitForWork.wait(delay);
-         }
-    } 
+            now = epicsTime::getCurrent();
+
+        } else if((waitfor = queue.front()->timeToRun - now) <= 0) {
+            // execute first expired job
+
+            TimerCallbackPtr work;
+            work.swap(queue.front());
+            work->onList = false;
+            queue.pop_front();
+
+            {
+                epicsGuardRelease<epicsMutex> U(G);
+
+                work->callback();
+            }
+
+            if(work->period > 0.0) {
+                work->timeToRun += work->period;
+                addElement(work);
+            }
+
+            // don't update 'now' until all expired jobs run
+
+        } else {
+            waiting = true;
+            // wait for first un-expired
+            epicsGuardRelease<epicsMutex> U(G);
+
+            waitForWork.wait(waitfor);
+            now = epicsTime::getCurrent();
+        }
+        waiting = false;
+    }
 }
 
 Timer::~Timer() {
+    close();
+}
+
+void Timer::close() {
     {
          Lock xx(mutex);
+         if(!alive)
+             return; // already closed
          alive = false;
     }
     waitForWork.signal();
     thread.exitWait();
-    TimerCallbackPtr timerCallback;
-    while(true) {
-        timerCallback = head;
-        if(head.get()==NULL) break;
+
+    queue_t temp;
+    temp.swap(queue);
+
+    for(;!temp.empty(); temp.pop_front()) {
+        TimerCallbackPtr& head = temp.front();
+        head->onList = false;
         head->timerStopped();
-        head = timerCallback->next;
-        timerCallback->next.reset();
-        timerCallback->onList = false;
     }
 }
 
@@ -170,49 +166,44 @@ void Timer::schedulePeriodic(
     double delay,
     double period)
 {
-    if(isScheduled(timerCallback)) {
-        throw std::logic_error(string("already queued"));
-    }
+    epicsTime now(epicsTime::getCurrent());
+
+    bool wakeup;
     {
         Lock xx(mutex);
+        if(timerCallback->onList) {
+            throw std::logic_error(string("already queued"));
+        }
+
         if(!alive) {
+            xx.unlock();
             timerCallback->timerStopped();
             return;
         }
-    }
-    TimeStamp timeStamp;
-    timeStamp.getCurrent();
-    timeStamp += delay;
-    timerCallback->timeToRun.getCurrent();
-    timerCallback->timeToRun += delay;
-    timerCallback->period = period;
-    bool isFirst = false;
-    {
-        Lock xx(mutex);
+
+        timerCallback->timeToRun = now + delay;
+        timerCallback->period = period;
+
         addElement(timerCallback);
-        if(timerCallback.get()==head.get()) isFirst = true;
+        wakeup = waiting && queue.front()==timerCallback;
     }
-    if(isFirst) waitForWork.signal();
+    if(wakeup) waitForWork.signal();
 }
 
-void Timer::dump(std::ostream& o)
+void Timer::dump(std::ostream& o) const
 {
     Lock xx(mutex);
     if(!alive) return;
-    TimeStamp currentTime;
-    TimerCallbackPtr nodeToCall(head);
-    currentTime.getCurrent();
-    while(true) {
-         if(nodeToCall.get()==NULL) return;
-         TimeStamp timeToRun = nodeToCall->timeToRun;
-         double period = nodeToCall->period;
-         double diff = TimeStamp::diff(timeToRun,currentTime);
-         o << "timeToRun " << diff << " period " << period << std::endl;
-         nodeToCall = nodeToCall->next;
-     }
+    epicsTime now(epicsTime::getCurrent());
+
+    for(queue_t::const_iterator it(queue.begin()), end(queue.end()); it!=end; ++it) {
+        const TimerCallbackPtr& nodeToCall = *it;
+        o << "timeToRun " << (nodeToCall->timeToRun - now)
+          << " period " << nodeToCall->period << "\n";
+    }
 }
 
-std::ostream& operator<<(std::ostream& o, Timer& timer)
+std::ostream& operator<<(std::ostream& o, const Timer& timer)
 {
     timer.dump(o);
     return o;

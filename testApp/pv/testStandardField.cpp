@@ -15,6 +15,7 @@
 #include <epicsUnitTest.h>
 #include <testMain.h>
 
+#include <pv/pvUnitTest.h>
 #include <pv/pvIntrospect.h>
 #include <pv/pvData.h>
 #include <pv/convert.h>
@@ -29,9 +30,7 @@ static StandardFieldPtr standardField = getStandardField();
 
 static void print(const string& name, FieldConstPtr const & f)
 {
-    std::ostringstream strm;
-    strm << std::endl << name << std::endl << f << std::endl;
-    testDiag("%s", strm.str().c_str());
+    testShow()<<name<<'\n'<<format::indent_level(1)<<f;
 }
 
 MAIN(testStandardField)

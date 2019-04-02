@@ -65,3 +65,7 @@ TESTS += testFieldBuilder
 TESTPROD_HOST += testValueBuilder
 testValueBuilder_SRCS += testValueBuilder.cpp
 TESTS += testValueBuilder
+
+TESTPROD_Linux += performstruct
+performstruct_SRCS += performstruct.cpp
+performstruct_SYS_LIBS_Linux += rt

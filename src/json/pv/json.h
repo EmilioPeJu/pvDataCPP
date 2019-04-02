@@ -51,14 +51,31 @@ struct epicsShareClass JSONPrintOptions
 
 /** Print PVStructure as JSON
  *
- * Restrictions:
- *
- * - No support for union or array of union
+ * 'mask' selects those fields which will be printed.
+ * @version Overload added after 7.0.0
  */
 epicsShareFunc
 void printJSON(std::ostream& strm,
-               const PVField::const_shared_pointer& val,
+               const PVStructure& val,
+               const BitSet& mask,
                const JSONPrintOptions& opts = JSONPrintOptions());
+
+/** Print PVField as JSON
+ * @version Overload added after 7.0.0
+ */
+epicsShareFunc
+void printJSON(std::ostream& strm,
+               const PVField& val,
+               const JSONPrintOptions& opts = JSONPrintOptions());
+
+// To be deprecated in favor of previous form
+FORCE_INLINE
+void printJSON(std::ostream& strm,
+               const PVField::const_shared_pointer& val,
+               const JSONPrintOptions& opts = JSONPrintOptions())
+{
+    printJSON(strm, *val, opts);
+}
 
 /** Parse JSON text into a PVStructure
  *
@@ -82,11 +99,21 @@ PVStructure::shared_pointer parseJSON(std::istream& strm);
  * @param dest Store in fields of this structure
  * @param assigned Which fields of _dest_ were assigned. (Optional)
  * @throws std::runtime_error on failure.  dest and assigned may be modified.
+ * @version Overload added after 7.0.0
  */
 epicsShareFunc
 void parseJSON(std::istream& strm,
-               const PVField::shared_pointer& dest,
+               PVField& dest,
                BitSet *assigned=0);
+
+// To be deprecated in favor of previous form
+FORCE_INLINE
+void parseJSON(std::istream& strm,
+               const PVField::shared_pointer& dest,
+               BitSet *assigned=0)
+{
+    parseJSON(strm, *dest, assigned);
+}
 
 
 /** Wrapper around yajl_parse()

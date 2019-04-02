@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <epicsThread.h>
 #include <epicsUnitTest.h>
+#include <epicsExit.h>
 
 /* copy */
 int testCreateRequest(void);
@@ -22,7 +23,6 @@ int testBaseException(void);
 int testBitSet(void);
 int testByteBuffer(void);
 int testOverrunBitSet(void);
-int testQueue(void);
 int testSerialization(void);
 int testSharedVector(void);
 int testThread(void);
@@ -71,7 +71,6 @@ void pvDataAllTests(void)
     runTest(testBitSet);
     runTest(testByteBuffer);
     runTest(testOverrunBitSet);
-    runTest(testQueue);
     runTest(testSerialization);
     runTest(testSharedVector);
     runTest(testThread);
@@ -86,5 +85,6 @@ void pvDataAllTests(void)
 
     /* property */
     runTest(testCreateRequest);
-}
 
+    epicsExit(0);   /* Trigger test harness */
+}

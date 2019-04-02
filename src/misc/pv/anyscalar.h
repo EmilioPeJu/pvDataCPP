@@ -48,7 +48,7 @@ constexpr size_t cmax(size_t A, size_t B) {
  assert(A.ref<double>()==5.0); // throws AnyScalar::bad_cast
  @endcode
  */
-class AnyScalar {
+class epicsShareClass AnyScalar {
 public:
     struct bad_cast : public std::exception {
 #if __cplusplus>=201103L
@@ -95,8 +95,11 @@ private:
         return *reinterpret_cast<const T*>(_wrap.blob);
     }
 public:
+    //! Construct empty
+    //! @post empty()==true
     AnyScalar() : _stype((ScalarType)-1) {}
 
+    //! Construct from provided value.
     template<typename T>
     explicit AnyScalar(T v)
     {
@@ -112,149 +115,52 @@ public:
         _stype = (ScalarType)ScalarTypeID<TT>::value;
     }
 
-    AnyScalar(const AnyScalar& o)
-        :_stype(o._stype)
-    {
-        if(o._stype==pvString) {
-            new (_wrap.blob) std::string(o._as<std::string>());
-        } else if(o._stype!=(ScalarType)-1) {
-            memcpy(_wrap.blob, o._wrap.blob, sizeof(_largest_blob));
-        }
-    }
+    //! Construct from un-typed pointer.
+    //! Caller is responsible to ensure that buf actually points to the provided type
+    //! @version Added after 7.0.0
+    AnyScalar(ScalarType type, const void *buf);
+
+    AnyScalar(const AnyScalar& o);
 
 #if __cplusplus>=201103L
-    AnyScalar(AnyScalar&& o)
-        :_stype(o._stype)
-    {
-        typedef std::string string;
-        if(o._stype==pvString) {
-            new (_wrap.blob) std::string();
-            _as<std::string>() = std::move(o._as<std::string>());
-            o._as<string>().~string();
-        } else if(o._stype!=(ScalarType)-1) {
-            memcpy(_wrap.blob, o._wrap.blob, sizeof(_largest_blob));
-        }
-        o._stype = (ScalarType)-1;
-    }
+    AnyScalar(AnyScalar&& o);
 #endif
 
-    ~AnyScalar() {
-        if(_stype==pvString) {
-            typedef std::string string;
-            _as<string>().~string();
-        }
-        // other types need no cleanup
-    }
+    inline ~AnyScalar() {clear();}
 
-    AnyScalar& operator=(const AnyScalar& o) {
+    inline AnyScalar& operator=(const AnyScalar& o) {
         AnyScalar(o).swap(*this);
         return *this;
     }
 
     template<typename T>
-    AnyScalar& operator=(T v) {
+    inline AnyScalar& operator=(T v) {
         AnyScalar(v).swap(*this);
         return *this;
     }
 
 #if __cplusplus>=201103L
-    AnyScalar& operator=(AnyScalar&& o) {
-        if(_stype==pvString) {
-            typedef std::string string;
-            _as<string>().~string();
-        }
-        _stype = (ScalarType)-1;
+    inline AnyScalar& operator=(AnyScalar&& o) {
+        clear();
         swap(o);
         return *this;
     }
 #endif
 
-    void swap(AnyScalar& o) {
-        typedef std::string string;
-        switch((int)_stype) {
-        case -1:
-            switch((int)o._stype) {
-            case -1:
-                // nil <-> nil
-                break;
-            case pvString:
-                // nil <-> string
-                new (_wrap.blob) std::string();
-                _as<std::string>().swap(o._as<std::string>());
-                o._as<std::string>().~string();
-                break;
-            default:
-                // nil <-> non-string
-                memcpy(_wrap.blob, o._wrap.blob, sizeof(_largest_blob));
-                break;
-            }
-            break;
-        case pvString:
-            switch((int)o._stype) {
-            case -1:
-                // string <-> nil
-                new (o._wrap.blob) std::string();
-                _as<std::string>().swap(o._as<std::string>());
-                _as<std::string>().~string();
-                break;
-            case pvString:
-                // string <-> string
-                _as<std::string>().swap(o._as<std::string>());
-                break;
-            default: {
-                // string <-> non-string
-                std::string temp;
-                temp.swap(_as<std::string>());
+    //! Reset internal state.
+    //! @version Added after 7.0.0
+    //! @post empty()==true
+    void clear();
 
-                _as<std::string>().~string();
+    void swap(AnyScalar& o);
 
-                memcpy(_wrap.blob, o._wrap.blob, sizeof(_largest_blob));
-
-                new (o._wrap.blob) std::string();
-                temp.swap(o._as<std::string>());
-            }
-                break;
-            }
-            break;
-        default:
-            switch((int)o._stype) {
-            case -1:
-                // non-string <-> nil
-                memcpy(o._wrap.blob, _wrap.blob, sizeof(_largest_blob));
-                break;
-            case pvString: {
-                // non-string <-> string
-                std::string temp;
-                temp.swap(o._as<std::string>());
-
-                o._as<std::string>().~string();
-
-                memcpy(o._wrap.blob, _wrap.blob, sizeof(_largest_blob));
-
-                new (_wrap.blob) std::string();
-                temp.swap(_as<std::string>());
-            }
-                break;
-            default:
-                // non-string <-> non-string
-                _largest_blob temp;
-                memcpy(&temp, _wrap.blob, sizeof(_largest_blob));
-                memcpy(_wrap.blob, o._wrap.blob, sizeof(_largest_blob));
-                memcpy(o._wrap.blob, &temp, sizeof(_largest_blob));
-                // std::swap(o._wrap.blob, _wrap.blob); // gcc <=4.3 doesn't like this
-                break;
-            }
-            break;
-        }
-        std::swap(_stype, o._stype);
-    }
-
+    //! Type code of contained value.  Or (ScalarType)-1 is empty.
     inline ScalarType type() const {
         return _stype;
     }
 
-    void* unsafe() { return _wrap.blob; }
-    const void* unsafe() const { return _wrap.blob; }
+    inline       void* unsafe()       { return _wrap.blob; }
+    inline const void* unsafe() const { return _wrap.blob; }
 
     inline bool empty() const { return _stype==(ScalarType)-1; }
 
@@ -267,8 +173,22 @@ public:
     operator bool_type() const { return !empty() ? &AnyScalar::swap : 0; }
 #endif
 
-    /** Return reference to wrapped value */
+    //! Provide read-only access to underlying buffer.
+    //! For a string this is std::string::c_str().
+    //! @version Added after 7.0.0
+    const void* bufferUnsafe() const;
+
+    /** Return typed reference to wrapped value.  Non-const reference allows value modification
+     *
+     * @throws bad_cast when the requested type does not match the stored type
+     @code
+       AnyScalar v(42);
+       v.ref<uint32>() = 43;
+       assert(v.ref<uint32>() == 43);
+     @endcode
+     */
     template<typename T>
+    inline
     // T -> strip_const -> map to storage type -> add reference
     typename detail::any_storage_type<typename meta::strip_const<T>::type>::type&
     ref() {
@@ -277,10 +197,19 @@ public:
 
         if(_stype!=(ScalarType)ScalarTypeID<TT>::value)
             throw bad_cast();
-        return _as<TT>();
+        return reinterpret_cast<TT&>(_wrap.blob);
     }
 
+    /** Return typed reference to wrapped value.  Const reference does not allow modification.
+     *
+     * @throws bad_cast when the requested type does not match the stored type
+     @code
+       const AnyScalar v(42);
+       assert(v.ref<uint32>() == 42);
+     @endcode
+     */
     template<typename T>
+    inline
     // T -> strip_const -> map to storage type -> add const reference
     typename meta::decorate_const<typename detail::any_storage_type<typename meta::strip_const<T>::type>::type>::type&
     ref() const {
@@ -289,11 +218,15 @@ public:
 
         if(_stype!=(ScalarType)ScalarTypeID<TT>::value)
             throw bad_cast();
-        return _as<TT>();
+        return reinterpret_cast<typename meta::decorate_const<TT>::type&>(_wrap.blob);
     }
 
-    /** copy out wrapped value, with a value conversion. */
+    /** copy out wrapped value, with a value conversion.
+     *
+     * @throws bad_cast when empty()==true
+     */
     template<typename T>
+    inline
     T as() const {
         typedef typename meta::strip_const<T>::type T2;
         typedef typename detail::any_storage_type<T2>::type TT;
@@ -307,25 +240,11 @@ public:
     }
 
 private:
-    friend std::ostream& operator<<(std::ostream& strm, const AnyScalar& v);
+    friend epicsShareFunc std::ostream& operator<<(std::ostream& strm, const AnyScalar& v);
 };
 
-inline
-std::ostream& operator<<(std::ostream& strm, const AnyScalar& v)
-{
-    switch(v.type()) {
-#define CASE(BASETYPE, PVATYPE, DBFTYPE, PVACODE) case pv ## PVACODE: strm<<v._as<PVATYPE>(); break;
-#define CASE_REAL_INT64
-#define CASE_STRING
-#include "pv/typemap.h"
-#undef CASE
-#undef CASE_REAL_INT64
-#undef CASE_STRING
-    default:
-        strm<<"(nil)"; break;
-    }
-    return strm;
-}
+epicsShareExtern
+std::ostream& operator<<(std::ostream& strm, const AnyScalar& v);
 
 }} // namespace epics::pvData
 

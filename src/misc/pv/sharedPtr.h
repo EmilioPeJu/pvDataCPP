@@ -62,14 +62,20 @@
 #if defined(SHARED_FROM_MANUAL)
 // define SHARED_FROM_MANUAL if from some reason it is desirable to manually select
 // which shared_ptr implementation to use
-#elif __cplusplus>=201103L || (defined(_MSC_VER) && (_MSC_VER>=1600)) || (__clang__ && __APPLE__)
-// c++11 or MSVC 2010
-// clang on linux has tr1/memory, clang on OSX doesn't
+#elif __cplusplus>=201103L || (defined(_MSC_VER) && (_MSC_VER>=1600)) || defined(_LIBCPP_VERSION)
+// MSVC has been bad about incrementing __cplusplus, even when new features are added.  shared_ptr from MSVC 2010
+// the llvm libc++ doesn't bother with tr1, and puts shared_ptr in std:: even with -std=c++98
 #  define SHARED_FROM_STD
 
 #elif defined(__GNUC__) && __GNUC__>=4 && !defined(vxWorks)
    // GCC >=4.0.0
 #  define SHARED_FROM_TR1
+
+#elif defined(_MSC_VER) && _MSC_VER==1500
+// MSVC 2009  (eg. Visual C++ for Python 2.7)
+// Dinkumware _CPPLIB_VER=505
+// Has std::tr1::shared_ptr in <memory>
+#  define SHARED_TR1_FROM_STD
 
 #elif defined(_MSC_VER) && (_MSC_VER>1500 || defined(_HAS_TR1))
    // MSVC > 2008, or 2008 w/ SP1
@@ -119,6 +125,9 @@ namespace std {
 
 
 #endif // DEBUG_SHARED_PTR
+
+#elif defined(SHARED_TR1_FROM_STD)
+#  include <memory>
 
 #elif defined(SHARED_FROM_TR1)
 #  include <tr1/memory>
@@ -192,7 +201,8 @@ inline std::ostream& operator<<(std::ostream& strm, const ::detail::ref_shower<T
     typedef std::tr1::weak_ptr<clazz> weak_pointer; \
     typedef std::tr1::weak_ptr<const clazz> const_weak_pointer
 
-/* A semi-hack to help with migration from std::auto_ptr to std::unique_ptr,
+namespace epics{
+/** A semi-hack to help with migration from std::auto_ptr to std::unique_ptr,
  * and avoid copious deprecation warning spam
  * which may be hiding legitimate issues.
  *
@@ -205,7 +215,6 @@ inline std::ostream& operator<<(std::ostream& strm, const ::detail::ref_shower<T
  * copy/assignment/return are not supported
  * (use auto_ptr or unique_ptr explicitly).
  */
-namespace epics{
 #if __cplusplus>=201103L
 template<typename T>
 using auto_ptr = std::unique_ptr<T>;
