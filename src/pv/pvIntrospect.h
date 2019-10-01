@@ -14,6 +14,8 @@
 #include <iostream>
 #include <map>
 
+#include <epicsAssert.h>
+
 #include <pv/lock.h>
 #include <pv/noDefaultMethods.h>
 #include <pv/pvType.h>
@@ -360,6 +362,8 @@ public:
    //! Allocate a new instance
    //! @version Added after 7.0.0
     std::tr1::shared_ptr<PVField> build() const;
+
+    enum {isField=1};
 
 protected:
     /**
@@ -713,40 +717,96 @@ public:
      * @return The number of fields.
      */
     std::size_t getNumberFields() const {return fieldNames.size();}
+
     /**
-     * Get the field for the specified fieldName.
-     * @param fieldName The name of the field to get;
-     * @return The introspection interface.
-     * This will hold a null pointer if the field is not in the structure.
+     * Lookup Field by name
+     * @param fieldName Member field name. May not contain '.'
+     * @return NULL if no member by this name.
      */
     FieldConstPtr getField(std::string const &fieldName) const;
 
+    /** Lookup Field by name and cast to Field sub-class.
+     * @param fieldName Member field name. May not contain '.'
+     * @return NULL If no member by this name, or member exists, but has type other than FT.
+     */
     template<typename FT>
     std::tr1::shared_ptr<const FT> getField(std::string const &fieldName) const
     {
-        FieldConstPtr field(getField(fieldName));
-        if (field)
-            return std::tr1::dynamic_pointer_cast<const FT>(field);
-        else
-            return std::tr1::shared_ptr<const FT>();
+        STATIC_ASSERT(FT::isField); // only allow cast from Field sub-class
+        return std::tr1::dynamic_pointer_cast<const FT>(getField(fieldName));
     }
 
     /**
-     * Get the field for the specified fieldName.
-     * @param index The index of the field to get;
-     * @return The introspection interface.
-     * This will hold a null pointer if the field is not in the structure.
+     * Lookup Field by name
+     * @param fieldName Member field name. May not contain '.'
+     * @return Field pointer (never NULL)
+     * @throws std::runtime_error If no member by this name
+     */
+    FieldConstPtr getFieldT(std::string const &fieldName) const {return getFieldImpl(fieldName, true);};
+
+    /** Lookup Field by name and cast to Field sub-class.
+     * @param fieldName Member field name. May not contain '.'
+     * @return Field pointer (never NULL)
+     * @throws std::runtime_error If no member by this name, or member exists, but has type other than FT.
+     */
+    template<typename FT>
+    std::tr1::shared_ptr<const FT> getFieldT(std::string const &fieldName) const
+    {
+        STATIC_ASSERT(FT::isField); // only allow cast from Field sub-class
+        std::tr1::shared_ptr<const FT> result(
+            std::tr1::dynamic_pointer_cast<const FT>(getFieldT(fieldName))
+        );
+
+        if (!result)
+            throw std::runtime_error("Wrong Field type");
+
+        return result;
+    }
+
+    /** Lookup Field by index, within this Structure.
+     * @param index Index of member in this structure.  @code index>=0 && index<getNumberFields() @endcode
+     * @return Field pointer (never NULL)
+     * @throws std::out_of_range If index >= getNumberFields()
      */
     const FieldConstPtr& getField(std::size_t index) const {return fields.at(index);}
 
+    /** Lookup Field by index, within this Structure.
+     * @param index Index of member in this structure.  @code index>=0 && index<getNumberFields() @endcode
+     * @return NULL if member is not a sub-class of FT
+     * @throws std::out_of_range If index >= getNumberFields()
+     */
     template<typename FT>
     std::tr1::shared_ptr<const FT> getField(std::size_t index) const
     {
-        const FieldConstPtr& field(getField(index));
-        if (field)
-            return std::tr1::dynamic_pointer_cast<const FT>(field);
-        else
-            return std::tr1::shared_ptr<const FT>();
+        STATIC_ASSERT(FT::isField); // only allow cast from Field sub-class
+        return std::tr1::dynamic_pointer_cast<const FT>(getField(index));
+    }
+
+    /** Lookup Field by index, within this Structure.
+     * @param index Index of member in this structure.  @code index>=0 && index<getNumberFields() @endcode
+     * @return Field pointer (never NULL)
+     * @throws std::out_of_range If index >= getNumberFields()
+     */
+    FieldConstPtr getFieldT(std::size_t index) const {return fields.at(index);}
+
+    /** Lookup Field by index, within this Structure.
+     * @param index Index of member in this structure.  @code index>=0 && index<getNumberFields() @endcode
+     * @return Field pointer (never NULL)
+     * @throws std::out_of_range If index >= getNumberFields()
+     * @throws std::runtime_error If member is not a sub-class of FT
+     */
+    template<typename FT>
+    std::tr1::shared_ptr<const FT> getFieldT(std::size_t index) const
+    {
+        STATIC_ASSERT(FT::isField); // only allow cast from Field sub-class
+        std::tr1::shared_ptr<const FT> result(
+            std::tr1::dynamic_pointer_cast<const FT>(getFieldT(index))
+        );
+
+        if (!result)
+            throw std::runtime_error("Wrong Field type");
+
+        return result;
     }
 
     /**
@@ -790,6 +850,7 @@ private:
     FieldConstPtrArray fields;
     std::string id;
 
+    FieldConstPtr getFieldImpl(const std::string& fieldName, bool throws) const;
     void dumpFields(std::ostream& o) const;
     
     friend class FieldCreate;
@@ -836,40 +897,96 @@ public:
      * @return The number of fields.
      */
     std::size_t getNumberFields() const {return fieldNames.size();}
+
     /**
-     * Get the field for the specified fieldName.
-     * @param fieldName The name of the field to get;
-     * @return The introspection interface.
-     * This will hold a null pointer if the field is not in the union.
+     * Lookup Field by name
+     * @param fieldName Member field name. May not contain '.'
+     * @return NULL if no member by this name.
      */
     FieldConstPtr getField(std::string const &fieldName) const;
 
+    /** Lookup Field by name and cast to Field sub-class.
+     * @param fieldName Member field name. May not contain '.'
+     * @return NULL If no member by this name, or member exists, but has type other than FT.
+     */
     template<typename FT>
     std::tr1::shared_ptr<const FT> getField(std::string const &fieldName) const
     {
-        FieldConstPtr field = getField(fieldName);
-        if (field)
-            return std::tr1::dynamic_pointer_cast<const FT>(field);
-        else
-            return std::tr1::shared_ptr<const FT>();
+        STATIC_ASSERT(FT::isField); // only allow cast from Field sub-class
+        return std::tr1::dynamic_pointer_cast<const FT>(getField(fieldName));
     }
 
     /**
-     * Get the field for the specified fieldName.
-     * @param index The index of the field to get;
-     * @return The introspection interface.
-     * This will hold a null pointer if the field is not in the union.
+     * Lookup Field by name
+     * @param fieldName Member field name. May not contain '.'
+     * @return Field pointer (never NULL)
+     * @throws std::runtime_error If no member by this name
+     */
+    FieldConstPtr getFieldT(std::string const &fieldName) const {return getFieldImpl(fieldName, true);};
+
+    /** Lookup Field by name and cast to Field sub-class.
+     * @param fieldName Member field name. May not contain '.'
+     * @return Field pointer (never NULL)
+     * @throws std::runtime_error If no member by this name, or member exists, but has type other than FT.
+     */
+    template<typename FT>
+    std::tr1::shared_ptr<const FT> getFieldT(std::string const &fieldName) const
+    {
+        STATIC_ASSERT(FT::isField); // only allow cast from Field sub-class
+        std::tr1::shared_ptr<const FT> result(
+            std::tr1::dynamic_pointer_cast<const FT>(getFieldT(fieldName))
+        );
+
+        if (!result)
+            throw std::runtime_error("Wrong Field type");
+
+        return result;
+    }
+
+    /** Lookup Field by index, within this Union.
+     * @param index Index of member in this union.  @code index>=0 && index<getNumberFields() @endcode
+     * @return Field pointer (never NULL)
+     * @throws std::out_of_range If index >= getNumberFields()
      */
     FieldConstPtr getField(std::size_t index) const {return fields.at(index);}
 
+    /** Lookup Field by index, within this Union.
+     * @param index Index of member in this union.  @code index>=0 && index<getNumberFields() @endcode
+     * @return NULL if member is not a sub-class of FT
+     * @throws std::out_of_range If index >= getNumberFields()
+     */
     template<typename FT>
     std::tr1::shared_ptr<const FT> getField(std::size_t index) const
     {
-        FieldConstPtr field = getField(index);
-        if (field)
-            return std::tr1::dynamic_pointer_cast<const FT>(field);
-        else
-            return std::tr1::shared_ptr<const FT>();
+        STATIC_ASSERT(FT::isField); // only allow cast from Field sub-class
+        return std::tr1::dynamic_pointer_cast<const FT>(getField(index));
+    }
+
+    /** Lookup Field by index, within this Union.
+     * @param index Index of member in this union.  @code index>=0 && index<getNumberFields() @endcode
+     * @return Field pointer (never NULL)
+     * @throws std::out_of_range If index >= getNumberFields()
+     */
+    FieldConstPtr getFieldT(std::size_t index) const {return fields.at(index);}
+
+    /** Lookup Field by index, within this Structure.
+     * @param index Index of member in this structure.  @code index>=0 && index<getNumberFields() @endcode
+     * @return Field pointer (never NULL)
+     * @throws std::out_of_range If index >= getNumberFields()
+     * @throws std::runtime_error If member is not a sub-class of FT
+     */
+    template<typename FT>
+    std::tr1::shared_ptr<const FT> getFieldT(std::size_t index) const
+    {
+        STATIC_ASSERT(FT::isField); // only allow cast from Field sub-class
+        std::tr1::shared_ptr<const FT> result(
+            std::tr1::dynamic_pointer_cast<const FT>(getFieldT(index))
+        );
+
+        if (!result)
+            throw std::runtime_error("Wrong Field type");
+
+        return result;
     }
 
     /**
@@ -929,7 +1046,8 @@ private:
    StringArray fieldNames;
    FieldConstPtrArray fields;
    std::string id;
-   
+
+   FieldConstPtr getFieldImpl(const std::string& fieldName, bool throws) const;
    void dumpFields(std::ostream& o) const;
 
    friend class FieldCreate;

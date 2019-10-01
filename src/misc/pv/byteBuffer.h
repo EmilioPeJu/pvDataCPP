@@ -16,6 +16,7 @@
 #include <epicsEndian.h>
 #include <shareLib.h>
 #include <epicsAssert.h>
+#include <compilerDependencies.h>
 
 #include <pv/templateMeta.h>
 #include <pv/pvType.h>
@@ -695,7 +696,7 @@ public:
     EPICS_ALWAYS_INLINE double getDouble (std::size_t  index) { return get<double>(index); }
 
     // TODO remove
-    EPICS_ALWAYS_INLINE const char* getArray() const
+    EPICS_ALWAYS_INLINE const char* getArray() const EPICS_DEPRECATED
     {
         return _buffer;
     }
@@ -803,8 +804,8 @@ private:
         assert(n<=getRemaining());
 
         if (reverse<T>()) {
-            for(std::size_t i=0; i<n; i+=sizeof(T)) {
-                detail::store_unaligned(_position+i, swap<T>(values[i]));
+            for(std::size_t i=0; i<count; i++) {
+                detail::store_unaligned(_position+i*sizeof(T), swap<T>(values[i]));
             }
         } else {
             memcpy(_position, values, n);
@@ -819,8 +820,8 @@ private:
         assert(n<=getRemaining());
 
         if (reverse<T>()) {
-            for(std::size_t i=0; i<n; i+=sizeof(T)) {
-                values[i] = swap<T>(detail::load_unaligned<T>(_position+i));
+            for(std::size_t i=0; i<count; i++) {
+                values[i] = swap<T>(detail::load_unaligned<T>(_position+i*sizeof(T)));
             }
         } else {
             memcpy(values, _position, n);

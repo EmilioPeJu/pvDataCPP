@@ -551,6 +551,21 @@ size_t Structure::getFieldIndex(string const &fieldName) const {
     return -1;
 }
 
+FieldConstPtr Structure::getFieldImpl(string const & fieldName, bool throws) const {
+    for(size_t i=0, N=fields.size(); i<N; i++)
+        if(fieldName==fieldNames[i])
+            return fields[i];
+
+    if (throws) {
+        std::stringstream ss;
+        ss << "Failed to get field: "
+           << fieldName << " (not found)";
+        throw std::runtime_error(ss.str());
+    } else {
+        return FieldConstPtr();
+    }
+}
+
 std::ostream& Structure::dump(std::ostream& o) const
 {
     o << format::indent() << getID() << std::endl;
@@ -748,6 +763,21 @@ size_t Union::getFieldIndex(string const &fieldName) const {
         if(result==0) return i;
     }
     return -1;
+}
+
+FieldConstPtr Union::getFieldImpl(string const & fieldName, bool throws) const {
+    for(size_t i=0, N=fields.size(); i<N; i++)
+        if(fieldName==fieldNames[i])
+            return fields[i];
+
+    if (throws) {
+        std::stringstream ss;
+        ss << "Failed to get field: "
+           << fieldName << " (not found)";
+        throw std::runtime_error(ss.str());
+    } else {
+        return FieldConstPtr();
+    }
 }
 
 std::ostream& Union::dump(std::ostream& o) const
